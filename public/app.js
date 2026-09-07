@@ -24,7 +24,16 @@ const els = {
   statusText: $('statusText'),
   installBtn: $('installBtn'),
   offlineBar: $('offlineBar'),
+  backdrop: $('backdrop'),
 };
+
+const isNarrow = () => window.matchMedia('(max-width: 900px)').matches;
+
+function setSidebar(open) {
+  els.sidebar.classList.toggle('open', open);
+  els.backdrop.hidden = !open;
+  requestAnimationFrame(() => els.backdrop.classList.toggle('show', open));
+}
 
 /* ---------------- state ---------------- */
 
@@ -159,7 +168,7 @@ function renderChatList() {
       persist();
       renderChatList();
       renderMessages();
-      els.sidebar.classList.remove('open');
+      setSidebar(false);
     });
     els.chatList.append(item);
   }
@@ -363,12 +372,28 @@ function startWakeListening() {
 /* ---------------- wiring ---------------- */
 
 function autosize() {
+  const max = Math.min(180, Math.round(window.innerHeight * 0.3));
   els.input.style.height = 'auto';
-  els.input.style.height = Math.min(els.input.scrollHeight, 180) + 'px';
+  const needed = els.input.scrollHeight;
+  els.input.style.height = Math.min(needed, max) + 'px';
+  els.input.style.overflowY = needed > max ? 'auto' : 'hidden';
+}
+
+/* keep the composer above the on-screen keyboard */
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const syncViewport = () => {
+    const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    document.documentElement.style.setProperty('--kb-inset', `${inset}px`);
+  };
+  vv.addEventListener('resize', syncViewport);
+  vv.addEventListener('scroll', syncViewport);
+  syncViewport();
 }
 
 els.composer.addEventListener('submit', (e) => {
   e.preventDefault();
+  if (isNarrow()) els.input.blur();
   const text = els.input.value;
   els.input.value = '';
   autosize();
@@ -377,7 +402,7 @@ els.composer.addEventListener('submit', (e) => {
 
 els.input.addEventListener('input', autosize);
 els.input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !isNarrow()) {
     e.preventDefault();
     els.composer.requestSubmit();
   }
@@ -395,7 +420,7 @@ els.micBtn.addEventListener('click', () => {
 
 els.newChat.addEventListener('click', () => {
   newChat();
-  els.sidebar.classList.remove('open');
+  setSidebar(false);
 });
 
 els.clearBtn.addEventListener('click', () => {
@@ -408,7 +433,15 @@ els.clearBtn.addEventListener('click', () => {
   renderMessages();
 });
 
-els.menuBtn.addEventListener('click', () => els.sidebar.classList.toggle('open'));
+els.menuBtn.addEventListener('click', () => setSidebar(!els.sidebar.classList.contains('open')));
+els.backdrop.addEventListener('click', () => setSidebar(false));
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') setSidebar(false);
+});
+window.addEventListener('resize', () => {
+  if (!isNarrow()) setSidebar(false);
+  autosize();
+});
 
 els.messages.addEventListener('click', (e) => {
   if (e.target.classList.contains('chip')) send(e.target.textContent);
@@ -497,6 +530,7 @@ els.ttsToggle.checked = !!state.settings.tts;
 els.wakeToggle.checked = !!state.settings.wake;
 renderChatList();
 renderMessages();
+els.input.placeholder = isNarrow() ? 'Message JARVIS…' : 'Message JARVIS…  (Enter to send, Shift+Enter for newline)';
 autosize();
 updateOnline();
 refreshHealth();
