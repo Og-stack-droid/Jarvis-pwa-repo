@@ -20,6 +20,7 @@ const els = {
   ttsToggle: $('ttsToggle'),
   wakeToggle: $('wakeToggle'),
   systemPrompt: $('systemPrompt'),
+  serverUrl: $('serverUrl'),
   statusDot: $('statusDot'),
   statusText: $('statusText'),
   installBtn: $('installBtn'),
@@ -28,6 +29,8 @@ const els = {
 };
 
 const isNarrow = () => window.matchMedia('(max-width: 900px)').matches;
+
+const api = (path) => (state.settings.server || '').replace(/\/$/, '') + path;
 
 function setSidebar(open) {
   els.sidebar.classList.toggle('open', open);
@@ -54,7 +57,7 @@ const store = {
 const state = {
   chats: store.load('jarvis.chats', []),
   activeId: store.load('jarvis.active', null),
-  settings: store.load('jarvis.settings', { model: '', tts: true, wake: false, system: DEFAULT_SYSTEM }),
+  settings: store.load('jarvis.settings', { model: '', tts: true, wake: false, system: DEFAULT_SYSTEM, server: '' }),
   streaming: false,
   abort: null,
 };
@@ -200,7 +203,7 @@ async function send(text) {
   let spokenUpTo = 0;
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch(api('/api/chat'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       signal: state.abort.signal,
@@ -460,6 +463,12 @@ els.wakeToggle.addEventListener('change', () => {
   else stopRecognition();
 });
 
+els.serverUrl.addEventListener('change', () => {
+  state.settings.server = els.serverUrl.value.trim();
+  persist();
+  refreshHealth();
+});
+
 els.systemPrompt.addEventListener('change', () => {
   state.settings.system = els.systemPrompt.value;
   persist();
@@ -474,7 +483,7 @@ els.modelSelect.addEventListener('change', () => {
 /* health + models */
 async function refreshHealth() {
   try {
-    const res = await fetch('/api/health');
+    const res = await fetch(api('/api/health'));
     const data = await res.json();
     if (!data.ok) throw new Error('backend down');
     els.statusDot.className = 'dot online';
@@ -494,7 +503,9 @@ async function refreshHealth() {
     els.modelBadge.textContent = state.settings.model || 'no model';
   } catch {
     els.statusDot.className = 'dot offline';
-    els.statusText.textContent = 'model backend unreachable';
+    els.statusText.textContent = state.settings.server
+      ? 'model backend unreachable'
+      : 'set a Server URL in settings';
     els.modelBadge.textContent = 'offline';
   }
 }
@@ -526,6 +537,7 @@ els.installBtn.addEventListener('click', async () => {
 /* boot */
 if (!state.chats.length || !activeChat()) newChat();
 els.systemPrompt.value = state.settings.system || DEFAULT_SYSTEM;
+els.serverUrl.value = state.settings.server || '';
 els.ttsToggle.checked = !!state.settings.tts;
 els.wakeToggle.checked = !!state.settings.wake;
 renderChatList();

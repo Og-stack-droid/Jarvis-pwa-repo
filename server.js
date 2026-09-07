@@ -10,6 +10,16 @@ const DEFAULT_MODEL = process.env.MODEL || 'llama3.2:3b';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
+
+/* the PWA may be served from another origin (e.g. a public deployment) and
+   point back at this machine, so the API is cross-origin friendly */
+app.use('/api', (req, res, next) => {
+  res.setHeader('access-control-allow-origin', req.headers.origin ?? '*');
+  res.setHeader('access-control-allow-headers', 'content-type');
+  res.setHeader('vary', 'origin');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
 app.get('/api/health', async (_req, res) => {

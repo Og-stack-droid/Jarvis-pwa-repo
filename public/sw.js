@@ -1,4 +1,4 @@
-const CACHE = 'jarvis-v2';
+const CACHE = 'jarvis-v3';
 const SHELL = [
   '/',
   '/index.html',
