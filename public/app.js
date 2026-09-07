@@ -545,9 +545,24 @@ renderMessages();
 els.input.placeholder = isNarrow() ? 'Message JARVIS…' : 'Message JARVIS…  (Enter to send, Shift+Enter for newline)';
 autosize();
 updateOnline();
-refreshHealth();
+applyDeployConfig();
 setInterval(refreshHealth, 30000);
 if (state.settings.wake) startWakeListening();
+
+/* a deployed copy can ship a config.json pointing at the JARVIS server it should use */
+async function applyDeployConfig() {
+  if (!state.settings.server) {
+    try {
+      const cfg = await (await fetch('config.json', { cache: 'no-store' })).json();
+      if (cfg.defaultServer) {
+        state.settings.server = cfg.defaultServer;
+        els.serverUrl.value = cfg.defaultServer;
+        persist();
+      }
+    } catch {}
+  }
+  refreshHealth();
+}
 
 /* share target / ?q= deep link */
 const q = new URLSearchParams(location.search).get('q');
