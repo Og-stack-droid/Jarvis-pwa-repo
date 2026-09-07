@@ -20,7 +20,7 @@ const els = {
   ttsToggle: $('ttsToggle'),
   wakeToggle: $('wakeToggle'),
   systemPrompt: $('systemPrompt'),
-  serverUrl: $('serverUrl'),
+  scrollBtn: $('scrollBtn'),
   statusDot: $('statusDot'),
   statusText: $('statusText'),
   installBtn: $('installBtn'),
@@ -88,32 +88,104 @@ function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-function renderMarkdown(text) {
-  const parts = text.split(/```/);
-  return parts
-    .map((part, i) => {
-      if (i % 2 === 1) {
-        const body = part.replace(/^[a-zA-Z0-9+#-]*\n/, '');
-        return `<pre><code>${escapeHtml(body)}</code></pre>`;
+function inline(text) {
+  return escapeHtml(text)
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>');
+}
+
+function renderBlocks(text) {
+  const lines = text.split('\n');
+  let html = '';
+  let list = null;
+  const closeList = () => {
+    if (list) html += `</${list}>`;
+    list = null;
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    const quote = /^>\s?(.*)$/.exec(line);
+
+    if (heading) {
+      closeList();
+      const level = Math.min(6, heading[1].length + 1);
+      html += `<h${level}>${inline(heading[2])}</h${level}>`;
+    } else if (bullet || numbered) {
+      const want = bullet ? 'ul' : 'ol';
+      if (list !== want) {
+        closeList();
+        html += `<${want}>`;
+        list = want;
       }
-      return escapeHtml(part)
-        .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      html += `<li>${inline((bullet ?? numbered)[1])}</li>`;
+    } else if (quote) {
+      closeList();
+      html += `<blockquote>${inline(quote[1])}</blockquote>`;
+    } else if (/^\s*(---|\*\*\*)\s*$/.test(line)) {
+      closeList();
+      html += '<hr />';
+    } else if (line.trim() === '') {
+      closeList();
+    } else {
+      closeList();
+      html += `<p>${inline(line)}</p>`;
+    }
+  }
+  closeList();
+  return html;
+}
+
+function renderMarkdown(text) {
+  return text
+    .split(/```/)
+    .map((part, i) => {
+      if (i % 2 === 0) return renderBlocks(part);
+      const lang = /^([a-zA-Z0-9+#._-]*)\n?/.exec(part)?.[1] ?? '';
+      const body = part.replace(/^[a-zA-Z0-9+#._-]*\n/, '');
+      return `<div class="code"><div class="code-head"><span>${escapeHtml(lang || 'code')}</span><button type="button" class="copy-code">Copy</button></div><pre><code>${escapeHtml(body)}</code></pre></div>`;
     })
     .join('');
 }
 
-function messageEl(role, content, { streaming = false, error = false } = {}) {
+function actionsEl(role, index) {
+  const bar = document.createElement('div');
+  bar.className = 'msg-actions';
+  const buttons =
+    role === 'user'
+      ? [['edit', 'Edit'], ['copy', 'Copy']]
+      : [['copy', 'Copy'], ['regen', 'Regenerate'], ['speak', 'Read aloud']];
+  for (const [action, label] of buttons) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.action = action;
+    b.dataset.index = String(index);
+    b.textContent = label;
+    bar.append(b);
+  }
+  return bar;
+}
+
+function messageEl(role, content, { streaming = false, error = false, index = -1 } = {}) {
   const wrap = document.createElement('div');
   wrap.className = `msg ${role}${error ? ' error' : ''}`;
   const avatar = document.createElement('div');
   avatar.className = 'avatar';
   avatar.textContent = role === 'user' ? 'YOU' : 'J';
+  const body = document.createElement('div');
+  body.className = 'body';
   const bubble = document.createElement('div');
   bubble.className = 'bubble' + (streaming ? ' cursor' : '');
-  bubble.innerHTML = renderMarkdown(content);
-  wrap.append(avatar, bubble);
-  return { wrap, bubble };
+  bubble.innerHTML = streaming && !content ? '<span class="typing"><i></i><i></i><i></i></span>' : renderMarkdown(content);
+  body.append(bubble);
+  if (!streaming && index >= 0) body.append(actionsEl(role, index));
+  wrap.append(avatar, body);
+  return { wrap, bubble, body };
 }
 
 function renderMessages() {
@@ -123,9 +195,9 @@ function renderMessages() {
     els.messages.append(heroNode());
     return;
   }
-  for (const m of chat.messages) {
-    els.messages.append(messageEl(m.role, m.content, { error: m.error }).wrap);
-  }
+  chat.messages.forEach((m, i) => {
+    els.messages.append(messageEl(m.role, m.content, { error: m.error, index: i }).wrap);
+  });
   els.messages.scrollTop = els.messages.scrollHeight;
 }
 
@@ -191,9 +263,14 @@ async function send(text) {
   renderChatList();
 
   els.messages.querySelector('.hero')?.remove();
-  els.messages.append(messageEl('user', content).wrap);
+  els.messages.append(messageEl('user', content, { index: chat.messages.length - 1 }).wrap);
 
-  const { wrap, bubble } = messageEl('assistant', '', { streaming: true });
+  await complete(chat);
+}
+
+async function complete(chat) {
+  if (state.streaming) return;
+  const { wrap, bubble, body } = messageEl('assistant', '', { streaming: true });
   els.messages.append(wrap);
   els.messages.scrollTop = els.messages.scrollHeight;
 
@@ -253,6 +330,9 @@ async function send(text) {
     }
   } finally {
     bubble.classList.remove('cursor');
+    const last = chat.messages.length - 1;
+    if (chat.messages[last]?.role === 'assistant') body.append(actionsEl('assistant', last));
+    else wrap.remove();
     chat.updated = Date.now();
     persist();
     setStreaming(false);
@@ -446,8 +526,62 @@ window.addEventListener('resize', () => {
   autosize();
 });
 
-els.messages.addEventListener('click', (e) => {
-  if (e.target.classList.contains('chip')) send(e.target.textContent);
+els.messages.addEventListener('click', async (e) => {
+  const target = e.target;
+  if (target.classList.contains('chip')) {
+    send(target.textContent);
+    return;
+  }
+  if (target.classList.contains('copy-code')) {
+    const code = target.closest('.code')?.querySelector('code')?.textContent ?? '';
+    await navigator.clipboard.writeText(code).catch(() => {});
+    flash(target, 'Copied');
+    return;
+  }
+
+  const action = target.dataset?.action;
+  if (!action) return;
+  const chat = activeChat();
+  const index = Number(target.dataset.index);
+  const message = chat?.messages[index];
+  if (!message) return;
+
+  if (action === 'copy') {
+    await navigator.clipboard.writeText(message.content).catch(() => {});
+    flash(target, 'Copied');
+  } else if (action === 'speak') {
+    speechSynthesis.cancel();
+    speakSentences(message.content, 0, true);
+  } else if (action === 'edit') {
+    if (state.streaming) return;
+    els.input.value = message.content;
+    chat.messages.length = index;
+    persist();
+    renderMessages();
+    autosize();
+    els.input.focus();
+  } else if (action === 'regen') {
+    if (state.streaming) return;
+    chat.messages.length = index;
+    persist();
+    renderMessages();
+    complete(chat);
+  }
+});
+
+function flash(button, text) {
+  const original = button.textContent;
+  button.textContent = text;
+  setTimeout(() => (button.textContent = original), 1200);
+}
+
+els.scrollBtn.addEventListener('click', () => {
+  els.messages.scrollTo({ top: els.messages.scrollHeight, behavior: 'smooth' });
+});
+
+els.messages.addEventListener('scroll', () => {
+  const distance = els.messages.scrollHeight - els.messages.scrollTop - els.messages.clientHeight;
+  els.scrollBtn.hidden = distance < 120;
 });
 
 els.ttsToggle.addEventListener('change', () => {
@@ -461,12 +595,6 @@ els.wakeToggle.addEventListener('change', () => {
   persist();
   if (state.settings.wake) startWakeListening();
   else stopRecognition();
-});
-
-els.serverUrl.addEventListener('change', () => {
-  state.settings.server = els.serverUrl.value.trim();
-  persist();
-  refreshHealth();
 });
 
 els.systemPrompt.addEventListener('change', () => {
@@ -503,9 +631,7 @@ async function refreshHealth() {
     els.modelBadge.textContent = state.settings.model || 'no model';
   } catch {
     els.statusDot.className = 'dot offline';
-    els.statusText.textContent = state.settings.server
-      ? 'model backend unreachable'
-      : 'set a Server URL in settings';
+    els.statusText.textContent = 'model backend unreachable';
     els.modelBadge.textContent = 'offline';
   }
 }
@@ -537,7 +663,6 @@ els.installBtn.addEventListener('click', async () => {
 /* boot */
 if (!state.chats.length || !activeChat()) newChat();
 els.systemPrompt.value = state.settings.system || DEFAULT_SYSTEM;
-els.serverUrl.value = state.settings.server || '';
 els.ttsToggle.checked = !!state.settings.tts;
 els.wakeToggle.checked = !!state.settings.wake;
 renderChatList();
@@ -551,12 +676,16 @@ if (state.settings.wake) startWakeListening();
 
 /* a deployed copy can ship a config.json pointing at the JARVIS server it should use */
 async function applyDeployConfig() {
+  const override = new URLSearchParams(location.search).get('server');
+  if (override !== null) {
+    state.settings.server = override.trim();
+    persist();
+  }
   if (!state.settings.server) {
     try {
       const cfg = await (await fetch('config.json', { cache: 'no-store' })).json();
       if (cfg.defaultServer) {
         state.settings.server = cfg.defaultServer;
-        els.serverUrl.value = cfg.defaultServer;
         persist();
       }
     } catch {}
